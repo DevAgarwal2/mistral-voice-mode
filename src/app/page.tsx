@@ -525,7 +525,7 @@ export default function Home() {
       </header>
 
       {/* Main content */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full max-w-2xl mx-auto px-6 pb-8">
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full max-w-2xl mx-auto px-6 pb-16 md:pb-8">
         {/* Status text */}
         <div className="mb-8 text-center min-h-[80px]">
           <h1
@@ -626,7 +626,10 @@ export default function Home() {
       </div>
 
       {/* Footer */}
-      <footer className="relative z-10 w-full py-4 flex items-center justify-center gap-4 text-xs text-[#aaaaaa]">
+      <footer 
+        className="relative z-10 w-full py-3 pb-8 md:pb-4 flex items-center justify-center gap-4 text-xs text-[#aaaaaa]"
+        style={{ paddingBottom: "max(24px, env(safe-area-inset-bottom))" }}
+      >
         <span>Community Edition · Not affiliated with Mistral AI</span>
         <a
           href="https://x.com/noctus91"
