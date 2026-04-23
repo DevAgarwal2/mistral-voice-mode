@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@mistralai/mistralai": "^2.2.1",
+    "@vercel/analytics": "^2.0.1",
     "lucide-react": "^0.475.0",
     "next": "15.5.15",
     "react": "^19",
