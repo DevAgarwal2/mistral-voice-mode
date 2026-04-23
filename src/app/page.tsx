@@ -471,7 +471,7 @@ export default function Home() {
   };
 
   return (
-    <main className="relative min-h-screen bg-[#f7f5f2] text-[#1a1a1a] flex flex-col items-center overflow-hidden select-none">
+    <main className="relative min-h-screen bg-[#f7f5f2] text-[#1a1a1a] flex flex-col items-center select-none">
       {/* Soft ambient background */}
       <div className="absolute inset-0 pointer-events-none">
         <div
@@ -600,8 +600,11 @@ export default function Home() {
 
         {/* Chat overlay */}
         {showChat && messages.length > 0 && (
-          <div className="fixed inset-x-0 bottom-0 top-[72px] z-20 bg-[#f7f5f2]/97 backdrop-blur-xl flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e2de]">
+          <div 
+            className="fixed inset-0 z-20 bg-[#f7f5f2]/97 backdrop-blur-xl flex flex-col pt-[72px]"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e2de] shrink-0">
               <span className="text-sm font-medium text-[#888888]">
                 Conversation
               </span>
@@ -612,7 +615,7 @@ export default function Home() {
                 Close
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-hide">
+            <div className="flex-1 overflow-y-auto overscroll-y-contain px-6 py-4 space-y-4 scrollbar-hide">
               {messages.map((msg, i) => (
                 <ChatMessage key={i} role={msg.role} content={msg.content} index={i} />
               ))}
