@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Square, RotateCcw, MessageSquare, X } from "lucide-react";
+import { Mic, Square, RotateCcw, MessageSquare, X, Camera, CameraOff } from "lucide-react";
 import VoiceOrb from "@/components/VoiceOrb";
 import VoiceSelector from "@/components/VoiceSelector";
 import ChatMessage from "@/components/ChatMessage";
+import CameraPreview from "@/components/CameraPreview";
 import MistralLogo from "@/components/MistralLogo";
 import { VOICES, DEFAULT_VOICE, Voice } from "@/lib/voices";
 
@@ -26,6 +27,7 @@ export default function Home() {
   const [transcript, setTranscript] = useState("");
   const [showChat, setShowChat] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -42,6 +44,9 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoListenTimerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionActiveRef = useRef(false);
+
+  // Camera refs
+  const cameraStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     conversationRef.current = messages;
@@ -61,6 +66,7 @@ export default function Home() {
       cleanupRecording();
       abortControllerRef.current?.abort();
       if (autoListenTimerRef.current) clearTimeout(autoListenTimerRef.current);
+      stopCamera();
     };
   }, []);
 
@@ -110,6 +116,57 @@ export default function Home() {
     setIsSessionActive(false);
     sessionActiveRef.current = false;
   }, [stopAudio, cleanupRecording, clearAutoListen]);
+
+  // Camera functions
+  const startCamera = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+      setCameraActive(true);
+    } catch (e) {
+      console.error("Camera access error:", e);
+      alert("Please allow camera access to use this feature.");
+    }
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current = null;
+    }
+    setCameraActive(false);
+  }, []);
+
+  const toggleCamera = useCallback(() => {
+    if (cameraActive) {
+      stopCamera();
+    } else {
+      startCamera();
+    }
+  }, [cameraActive, startCamera, stopCamera]);
+
+  const captureFrame = useCallback((): string | null => {
+    if (!cameraStreamRef.current || !cameraActive) return null;
+
+    const video = document.createElement("video");
+    video.srcObject = cameraStreamRef.current;
+    video.play();
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    // Draw current frame
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+    video.pause();
+    return dataUrl;
+  }, [cameraActive]);
 
   const playAudio = useCallback(
     async (audioBlob: Blob): Promise<void> => {
@@ -201,7 +258,7 @@ export default function Home() {
   }, []);
 
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
-  const sendMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const sendMessageRef = useRef<(text: string, image?: string) => Promise<void>>(async () => {});
 
   const startRecording = useCallback(async () => {
     try {
@@ -233,6 +290,9 @@ export default function Home() {
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: "audio/webm;codecs=opus",
       });
+
+      // Capture image frame when recording starts (if camera is active)
+      const capturedImage = cameraActive ? captureFrame() : null;
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -287,7 +347,7 @@ export default function Home() {
             return;
           }
 
-          await sendMessageRef.current(text);
+          await sendMessageRef.current(text, capturedImage || undefined);
         } catch (e) {
           console.error("STT error:", e);
           if (sessionActiveRef.current) {
@@ -311,21 +371,21 @@ export default function Home() {
       sessionActiveRef.current = false;
       setAppState("idle");
     }
-  }, [cleanupRecording, clearAutoListen, monitorSilence]);
+  }, [cleanupRecording, clearAutoListen, monitorSilence, cameraActive, captureFrame]);
 
   startRecordingRef.current = startRecording;
 
   const sendMessage = useCallback(
-    async (userText: string) => {
+    async (userText: string, image?: string) => {
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
       setAppState("thinking");
       setTranscript(userText);
 
-      const newMessages: Message[] = [
+      const newMessages: Array<Message & { image?: string }> = [
         ...conversationRef.current,
-        { role: "user", content: userText },
+        { role: "user", content: userText, image },
       ];
       setMessages(newMessages);
 
@@ -337,6 +397,7 @@ export default function Home() {
             messages: newMessages.map((m) => ({
               role: m.role,
               content: m.content,
+              image: m.image,
             })),
           }),
           signal: controller.signal,
@@ -506,6 +567,16 @@ export default function Home() {
             </button>
           )}
           <button
+            onClick={toggleCamera}
+            className={`p-2.5 rounded-xl border transition-colors ${
+              cameraActive
+                ? "bg-[#fa500f]/8 border-[#fa500f]/20 text-[#fa500f]"
+                : "bg-white border-[#e5e2de] text-[#888888] hover:text-[#1a1a1a] hover:border-[#d5d2ce]"
+            }`}
+          >
+            {cameraActive ? <CameraOff size={18} /> : <Camera size={18} />}
+          </button>
+          <button
             onClick={() => setShowChat(!showChat)}
             className={`p-2.5 rounded-xl border transition-colors ${
               showChat
@@ -624,6 +695,9 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Camera Preview */}
+      <CameraPreview stream={cameraStreamRef.current} onClose={stopCamera} />
 
       {/* Footer */}
       <footer 

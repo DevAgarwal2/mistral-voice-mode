@@ -92,6 +92,23 @@ export async function POST(req: NextRequest) {
       },
     ];
 
+    // Build messages with image support
+    const apiMessages = messages.map((m: any) => {
+      if (m.role === "user" && m.image) {
+        return {
+          role: "user",
+          content: [
+            { type: "text", text: m.content },
+            { type: "image_url", imageUrl: { url: m.image } },
+          ],
+        };
+      }
+      return {
+        role: m.role,
+        content: m.content,
+      };
+    });
+
     const response = await mistral.chat.complete({
       model: "mistral-small-2603",
       messages: [
@@ -99,9 +116,11 @@ export async function POST(req: NextRequest) {
           role: "system",
           content: `You are a helpful, concise voice assistant. Keep responses brief and natural, as if speaking. Avoid long paragraphs. Use conversational language. Be warm and engaging.
 
-Today's date is ${today}. You have access to web search for real-time information. When the user asks about recent events, current news, weather, sports, stock prices, or anything time-sensitive, use the web_search tool to get accurate, up-to-date information. Cite sources briefly.`,
+Today's date is ${today}. You have access to web search for real-time information. When the user asks about recent events, current news, weather, sports, stock prices, or anything time-sensitive, use the web_search tool to get accurate, up-to-date information. Cite sources briefly.
+
+When the user shares an image, describe what you see and answer their question about it. Be specific and helpful.`,
         },
-        ...messages,
+        ...apiMessages,
       ],
       temperature: 0.7,
       maxTokens: 600,
@@ -137,7 +156,7 @@ Today's date is ${today}. You have access to web search for real-time informatio
               role: "system",
               content: `You are a helpful, concise voice assistant. Today's date is ${today}. Keep responses brief and natural, as if speaking.`,
             },
-            ...messages,
+            ...apiMessages,
             {
               role: "assistant",
               content: message.content || "",
