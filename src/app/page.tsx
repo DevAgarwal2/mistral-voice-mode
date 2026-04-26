@@ -1,11 +1,9 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Square, RotateCcw, MessageSquare, X, Camera, CameraOff } from "lucide-react";
+import { Mic, Square, RotateCcw, X, Camera } from "lucide-react";
 import VoiceOrb from "@/components/VoiceOrb";
 import VoiceSelector from "@/components/VoiceSelector";
-import ChatMessage from "@/components/ChatMessage";
-import CameraPreview from "@/components/CameraPreview";
 import MistralLogo from "@/components/MistralLogo";
 import { VOICES, DEFAULT_VOICE, Voice } from "@/lib/voices";
 
@@ -25,14 +23,12 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<Voice>(DEFAULT_VOICE);
   const [transcript, setTranscript] = useState("");
-  const [showChat, setShowChat] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const conversationRef = useRef<Message[]>([]);
   const spacePressedRef = useRef(false);
 
@@ -44,16 +40,12 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoListenTimerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionActiveRef = useRef(false);
-
-  // Camera refs
+  const hasDetectedSpeechRef = useRef(false);
+  const recordingStartTimeRef = useRef<number>(0);
   const cameraStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     conversationRef.current = messages;
-  }, [messages]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
@@ -92,11 +84,10 @@ export default function Home() {
   }, []);
 
   const stopAudio = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current = null;
-    }
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.src = "";
+    audioRef.current = null;
   }, []);
 
   const clearAutoListen = useCallback(() => {
@@ -117,7 +108,6 @@ export default function Home() {
     sessionActiveRef.current = false;
   }, [stopAudio, cleanupRecording, clearAutoListen]);
 
-  // Camera functions
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -140,56 +130,41 @@ export default function Home() {
     setCameraActive(false);
   }, []);
 
-  const toggleCamera = useCallback(() => {
-    if (cameraActive) {
-      stopCamera();
-    } else {
-      startCamera();
-    }
-  }, [cameraActive, startCamera, stopCamera]);
-
   const captureFrame = useCallback((): string | null => {
-    if (!cameraStreamRef.current || !cameraActive) return null;
-
-    const video = document.createElement("video");
-    video.srcObject = cameraStreamRef.current;
-    video.play();
+    if (!cameraActive) return null;
+    const video = document.getElementById("camera-feed") as HTMLVideoElement | null;
+    if (!video || video.readyState < 2) return null;
 
     const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    // Draw current frame
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-    video.pause();
-    return dataUrl;
+    return canvas.toDataURL("image/jpeg", 0.6);
   }, [cameraActive]);
 
   const playAudio = useCallback(
     async (audioBlob: Blob): Promise<void> => {
+      if (audioRef.current) {
+        audioRef.current.src = "";
+        audioRef.current = null;
+      }
+
       const url = URL.createObjectURL(audioBlob);
       const audio = new Audio(url);
       audioRef.current = audio;
 
       return new Promise<void>((resolve) => {
-        audio.onended = () => {
+        const cleanup = () => {
           URL.revokeObjectURL(url);
           if (audioRef.current === audio) audioRef.current = null;
-          resolve();
         };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          if (audioRef.current === audio) audioRef.current = null;
-          resolve();
-        };
-        audio.play().catch(() => {
-          URL.revokeObjectURL(url);
-          if (audioRef.current === audio) audioRef.current = null;
-          resolve();
-        });
+
+        audio.onended = () => { cleanup(); resolve(); };
+        audio.onerror = () => { cleanup(); resolve(); };
+        audio.play().catch(() => { cleanup(); resolve(); });
       });
     },
     []
@@ -204,14 +179,10 @@ export default function Home() {
           body: JSON.stringify({ text, voiceId: selectedVoice.id }),
           signal,
         });
-        if (!res.ok) {
-          console.error("TTS failed");
-          return null;
-        }
+        if (!res.ok) return null;
         return await res.blob();
       } catch (e: any) {
         if (e.name === "AbortError") return null;
-        console.error("TTS error:", e);
         return null;
       }
     },
@@ -229,6 +200,8 @@ export default function Home() {
       sum += x * x;
     }
     const rms = Math.sqrt(sum / dataArray.length);
+
+    if (rms > 0.04) hasDetectedSpeechRef.current = true;
 
     if (rms < SILENCE_THRESHOLD) {
       if (!silenceTimerRef.current) {
@@ -249,10 +222,7 @@ export default function Home() {
   }, []);
 
   const stopRecording = useCallback(() => {
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state === "recording"
-    ) {
+    if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop();
     }
   }, []);
@@ -291,17 +261,29 @@ export default function Home() {
         mimeType: "audio/webm;codecs=opus",
       });
 
-      // Capture image frame when recording starts (if camera is active)
-      const capturedImage = cameraActive ? captureFrame() : null;
+      hasDetectedSpeechRef.current = false;
+      recordingStartTimeRef.current = Date.now();
 
       mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = async () => {
         cleanupRecording();
+        const recordingDuration = Date.now() - recordingStartTimeRef.current;
+
+        if (!hasDetectedSpeechRef.current || recordingDuration < 800) {
+          if (sessionActiveRef.current) {
+            autoListenTimerRef.current = setTimeout(() => {
+              if (sessionActiveRef.current) startRecordingRef.current();
+            }, AUTO_LISTEN_DELAY);
+          } else {
+            setAppState("idle");
+          }
+          return;
+        }
+
+        const capturedImage = cameraActive ? captureFrame() : null;
 
         if (audioChunksRef.current.length === 0) {
           if (sessionActiveRef.current) {
@@ -314,24 +296,15 @@ export default function Home() {
           return;
         }
 
-        const audioBlob = new Blob(audioChunksRef.current, {
-          type: "audio/webm",
-        });
-
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         setAppState("thinking");
 
         try {
           const formData = new FormData();
           formData.append("audio", audioBlob, "recording.webm");
 
-          const res = await fetch("/api/stt", {
-            method: "POST",
-            body: formData,
-          });
-
-          if (!res.ok) {
-            throw new Error("STT failed");
-          }
+          const res = await fetch("/api/stt", { method: "POST", body: formData });
+          if (!res.ok) throw new Error("STT failed");
 
           const data = await res.json();
           const text = data.text?.trim();
@@ -403,9 +376,7 @@ export default function Home() {
           signal: controller.signal,
         });
 
-        if (!res.ok) {
-          throw new Error("Chat request failed");
-        }
+        if (!res.ok) throw new Error("Chat request failed");
 
         const data = await res.json();
         const assistantContent = data.content || "I'm not sure what to say.";
@@ -425,9 +396,7 @@ export default function Home() {
           await playAudio(audioBlob);
         }
       } catch (e: any) {
-        if (e.name !== "AbortError") {
-          console.error("Chat error:", e);
-        }
+        if (e.name !== "AbortError") console.error("Chat error:", e);
       }
 
       if (!controller.signal.aborted) {
@@ -436,9 +405,7 @@ export default function Home() {
           setTranscript("");
           clearAutoListen();
           autoListenTimerRef.current = setTimeout(() => {
-            if (sessionActiveRef.current) {
-              startRecordingRef.current();
-            }
+            if (sessionActiveRef.current) startRecordingRef.current();
           }, AUTO_LISTEN_DELAY);
         } else {
           setAppState("idle");
@@ -451,7 +418,7 @@ export default function Home() {
 
   sendMessageRef.current = sendMessage;
 
-  const handleOrbClick = useCallback(() => {
+  const handleOrbClick = () => {
     if (appState === "idle") {
       setIsSessionActive(true);
       sessionActiveRef.current = true;
@@ -460,13 +427,20 @@ export default function Home() {
       stopRecording();
     } else if (appState === "speaking" || appState === "thinking") {
       interrupt();
-      setTimeout(() => {
-        setIsSessionActive(true);
-        sessionActiveRef.current = true;
-        startRecording();
-      }, 80);
     }
-  }, [appState, startRecording, stopRecording, interrupt]);
+  };
+
+  const handleCameraCenterClick = () => {
+    if (appState === "idle") {
+      setIsSessionActive(true);
+      sessionActiveRef.current = true;
+      startRecording();
+    } else if (appState === "listening") {
+      stopRecording();
+    } else if (appState === "speaking" || appState === "thinking") {
+      interrupt();
+    }
+  };
 
   const handleReset = useCallback(() => {
     interrupt();
@@ -502,9 +476,7 @@ export default function Home() {
       if (e.code === "Space") {
         e.preventDefault();
         spacePressedRef.current = false;
-        if (appState === "listening") {
-          stopRecording();
-        }
+        if (appState === "listening") stopRecording();
       }
     };
 
@@ -532,8 +504,8 @@ export default function Home() {
   };
 
   return (
-    <main className="relative min-h-screen bg-[#f7f5f2] text-[#1a1a1a] flex flex-col items-center select-none">
-      {/* Soft ambient background */}
+    <main className="relative min-h-[100dvh] bg-[#f7f5f2] text-[#1a1a1a] flex flex-col items-center select-none overflow-hidden">
+      {/* Ambient background */}
       <div className="absolute inset-0 pointer-events-none">
         <div
           className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full opacity-[0.04]"
@@ -544,9 +516,9 @@ export default function Home() {
       </div>
 
       {/* Header */}
-      <header className="relative z-10 w-full flex items-center justify-between px-6 py-5">
+      <header className="relative z-20 w-full flex items-center justify-between px-5 py-4 md:px-6 md:py-5">
         <div className="flex items-center gap-3">
-          <MistralLogo className="w-8 h-[22px]" />
+          <MistralLogo className="w-8 h-[22px] shrink-0" />
           <div className="flex flex-col">
             <span className="text-sm font-semibold tracking-tight text-[#1a1a1a]">
               Mistral
@@ -567,24 +539,14 @@ export default function Home() {
             </button>
           )}
           <button
-            onClick={toggleCamera}
+            onClick={() => (cameraActive ? stopCamera() : startCamera())}
             className={`p-2.5 rounded-xl border transition-colors ${
               cameraActive
                 ? "bg-[#fa500f]/8 border-[#fa500f]/20 text-[#fa500f]"
                 : "bg-white border-[#e5e2de] text-[#888888] hover:text-[#1a1a1a] hover:border-[#d5d2ce]"
             }`}
           >
-            {cameraActive ? <CameraOff size={18} /> : <Camera size={18} />}
-          </button>
-          <button
-            onClick={() => setShowChat(!showChat)}
-            className={`p-2.5 rounded-xl border transition-colors ${
-              showChat
-                ? "bg-[#fa500f]/8 border-[#fa500f]/20 text-[#fa500f]"
-                : "bg-white border-[#e5e2de] text-[#888888] hover:text-[#1a1a1a] hover:border-[#d5d2ce]"
-            }`}
-          >
-            {showChat ? <X size={18} /> : <MessageSquare size={18} />}
+            <Camera size={18} />
           </button>
           <button
             onClick={handleReset}
@@ -592,12 +554,22 @@ export default function Home() {
           >
             <RotateCcw size={18} />
           </button>
+          <a
+            href="https://x.com/noctus91"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-[#e5e2de] text-[#888888] hover:text-[#1a1a1a] hover:border-[#d5d2ce] transition-colors text-xs font-medium shrink-0"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="shrink-0">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+            <span>@noctus91</span>
+          </a>
         </div>
       </header>
 
       {/* Main content */}
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full max-w-2xl mx-auto px-6 pb-16 md:pb-8">
-        {/* Status text */}
         <div className="mb-8 text-center min-h-[80px]">
           <h1
             className="text-2xl font-semibold text-[#1a1a1a] tracking-tight"
@@ -620,36 +592,37 @@ export default function Home() {
           <button
             onClick={handleOrbClick}
             className="relative flex items-center justify-center outline-none focus:outline-none cursor-pointer"
+            style={{ touchAction: "manipulation" }}
           >
             <VoiceOrb state={appState} color={selectedVoice.color} />
 
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               {appState === "idle" && !isSessionActive && (
-                <Mic size={30} className="text-white/95" />
+                <Mic size={30} className="text-white/95 pointer-events-none" />
               )}
               {appState === "idle" && isSessionActive && (
-                <Mic size={28} className="text-white/95" />
+                <Mic size={28} className="text-white/95 pointer-events-none" />
               )}
               {appState === "listening" && (
-                <Square size={24} className="text-white/95 fill-white/95" />
+                <Square size={24} className="text-white/95 fill-white/95 pointer-events-none" />
               )}
               {appState === "thinking" && (
-                <div className="flex items-end gap-[5px] h-5">
+                <div className="flex items-end gap-[5px] h-5 pointer-events-none">
                   {[0, 1, 2].map((i) => (
                     <div
                       key={i}
-                      className="w-[5px] bg-white/95 rounded-full sound-bar"
+                      className="w-[5px] bg-white/95 rounded-full sound-bar pointer-events-none"
                       style={{ animationDelay: `${i * 0.15}s`, height: "4px" }}
                     />
                   ))}
                 </div>
               )}
               {appState === "speaking" && (
-                <div className="flex items-end gap-[4px] h-5">
+                <div className="flex items-end gap-[4px] h-5 pointer-events-none">
                   {[0, 1, 2, 3, 4].map((i) => (
                     <div
                       key={i}
-                      className="w-[4px] bg-white/95 rounded-full sound-bar"
+                      className="w-[4px] bg-white/95 rounded-full sound-bar pointer-events-none"
                       style={{ animationDelay: `${i * 0.1}s`, animationDuration: "0.4s" }}
                     />
                   ))}
@@ -659,7 +632,6 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Voice Selector */}
         <VoiceSelector
           voices={VOICES}
           selected={selectedVoice}
@@ -668,36 +640,118 @@ export default function Home() {
             stopAudio();
           }}
         />
-
-        {/* Chat overlay */}
-        {showChat && messages.length > 0 && (
-          <div 
-            className="fixed inset-0 z-20 bg-[#f7f5f2]/97 backdrop-blur-xl flex flex-col pt-[72px]"
-            style={{ WebkitOverflowScrolling: "touch" }}
-          >
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e2de] shrink-0">
-              <span className="text-sm font-medium text-[#888888]">
-                Conversation
-              </span>
-              <button
-                onClick={() => setShowChat(false)}
-                className="text-sm text-[#888888] hover:text-[#1a1a1a] transition-colors"
-              >
-                Close
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto overscroll-y-contain px-6 py-4 space-y-4 scrollbar-hide">
-              {messages.map((msg, i) => (
-                <ChatMessage key={i} role={msg.role} content={msg.content} index={i} />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Camera Preview */}
-      <CameraPreview stream={cameraStreamRef.current} onClose={stopCamera} />
+      {/* Fullscreen Camera Overlay — Phone-Optimized */}
+      {cameraActive && cameraStreamRef.current && (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col">
+          {/* Camera feed with rounded corners */}
+          <div className="flex-1 px-3 pt-3 pb-2">
+            <div className="relative w-full h-full rounded-[32px] overflow-hidden bg-neutral-900">
+              <video
+                id="camera-feed"
+                autoPlay
+                playsInline
+                muted
+                className="absolute inset-0 w-full h-full object-cover"
+                ref={(el) => {
+                  if (el && cameraStreamRef.current) {
+                    el.srcObject = cameraStreamRef.current;
+                  }
+                }}
+              />
+
+              {/* Top center Live indicator */}
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/30 backdrop-blur-md">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+                <span className="text-white text-xs font-semibold tracking-wide">Live</span>
+              </div>
+
+              {/* Top right close */}
+              <button
+                onClick={stopCamera}
+                className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/30 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/50 transition-colors"
+              >
+                <X size={18} strokeWidth={2.5} />
+              </button>
+
+              {/* Flip camera button */}
+              <button
+                onClick={async () => {
+                  const currentFacing = cameraStreamRef.current?.getVideoTracks()[0]?.getSettings().facingMode;
+                  const newFacing = currentFacing === "user" ? "environment" : "user";
+                  stopCamera();
+                  try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                      video: { facingMode: newFacing },
+                      audio: false,
+                    });
+                    cameraStreamRef.current = stream;
+                    setCameraActive(true);
+                  } catch (e) {
+                    console.error("Flip camera error:", e);
+                  }
+                }}
+                className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-black/40 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/60 transition-colors"
+              >
+                <RotateCcw size={18} />
+              </button>
+            </div>
+          </div>
+
+          {/* Bottom control bar */}
+          <div className="relative z-10 px-4 pb-8 pt-2 flex items-center justify-center gap-4" style={{ touchAction: "manipulation" }}>
+            <button
+              onClick={() => {
+                stopCamera();
+                startCamera();
+              }}
+              className="w-14 h-14 rounded-full bg-white flex items-center justify-center shadow-lg"
+              style={{ touchAction: "manipulation" }}
+            >
+              <Camera size={22} className="text-[#1a1a1a]" />
+            </button>
+
+            <button
+              onClick={handleCameraCenterClick}
+              className={`w-20 h-20 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-90 ${
+                appState === "listening"
+                  ? "bg-red-500"
+                  : appState === "thinking" || appState === "speaking"
+                  ? "bg-[#fa500f]"
+                  : "bg-white"
+              }`}
+              style={{ touchAction: "manipulation" }}
+            >
+              {appState === "listening" ? (
+                <Square size={28} className="text-white fill-white pointer-events-none" />
+              ) : appState === "thinking" || appState === "speaking" ? (
+                <div className="flex items-end gap-[5px] h-5 pointer-events-none">
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      className="w-[5px] bg-white rounded-full sound-bar pointer-events-none"
+                      style={{ animationDelay: `${i * 0.15}s`, height: "4px" }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Mic size={28} className="text-[#1a1a1a] pointer-events-none" />
+              )}
+            </button>
+
+            <button
+              onClick={stopCamera}
+              className="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center shadow-lg hover:bg-red-600 transition-colors"
+              style={{ touchAction: "manipulation" }}
+            >
+              <X size={22} className="text-white pointer-events-none" strokeWidth={2.5} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer 
@@ -705,22 +759,6 @@ export default function Home() {
         style={{ paddingBottom: "max(24px, env(safe-area-inset-bottom))" }}
       >
         <span>Community Edition · Not affiliated with Mistral AI</span>
-        <a
-          href="https://x.com/noctus91"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-[#888888] hover:text-[#1a1a1a] transition-colors"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-          >
-            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-          </svg>
-          <span className="font-medium">@noctus91</span>
-        </a>
       </footer>
     </main>
   );

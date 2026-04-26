@@ -169,7 +169,7 @@ export default function VoiceOrb({ state, color }: VoiceOrbProps) {
   return (
     <canvas
       ref={canvasRef}
-      className="w-[280px] h-[280px] md:w-[360px] md:h-[360px]"
+      className="w-[280px] h-[280px] md:w-[360px] md:h-[360px] pointer-events-none"
       style={{ touchAction: "none" }}
     />
   );

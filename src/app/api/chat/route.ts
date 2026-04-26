@@ -71,6 +71,10 @@ export async function POST(req: NextRequest) {
       day: "numeric",
     });
 
+    // Check if any message has an image — use vision model if so
+    const hasImage = messages.some((m: any) => m.image);
+    const model = hasImage ? "mistral-small-2506" : "mistral-small-2603";
+
     const tools = [
       {
         type: "function" as const,
@@ -99,7 +103,7 @@ export async function POST(req: NextRequest) {
           role: "user",
           content: [
             { type: "text", text: m.content },
-            { type: "image_url", imageUrl: { url: m.image } },
+            { type: "image_url", imageUrl: { url: m.image, detail: "auto" } },
           ],
         };
       }
@@ -110,7 +114,7 @@ export async function POST(req: NextRequest) {
     });
 
     const response = await mistral.chat.complete({
-      model: "mistral-small-2603",
+      model,
       messages: [
         {
           role: "system",
@@ -150,7 +154,7 @@ When the user shares an image, describe what you see and answer their question a
             .join("\n") || "No results found.";
 
         const followUp = await mistral.chat.complete({
-          model: "mistral-small-2603",
+          model,
           messages: [
             {
               role: "system",

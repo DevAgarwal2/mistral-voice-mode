@@ -11,31 +11,43 @@ export default function CameraPreview({ stream, onClose }: CameraPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {});
+    const video = videoRef.current;
+    if (video && stream) {
+      video.srcObject = stream;
+      video.play().catch(() => {});
     }
+    return () => {
+      if (video) {
+        video.pause();
+        video.srcObject = null;
+      }
+    };
   }, [stream]);
 
   if (!stream) return null;
 
   return (
-    <div className="fixed bottom-20 right-4 z-30 w-28 h-36 md:w-36 md:h-44 rounded-2xl overflow-hidden border-2 border-white shadow-lg bg-black">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="w-full h-full object-cover"
-      />
-      <button
-        onClick={onClose}
-        className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white flex items-center justify-center text-xs hover:bg-black/70 transition-colors"
-      >
-        ✕
-      </button>
-      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-[#fa500f]/90 text-white text-[10px] font-medium">
-        Live
+    <div className="fixed inset-x-0 bottom-[72px] z-30 md:bottom-auto md:top-20 md:right-4 md:left-auto md:w-48 md:h-60">
+      <div className="relative w-full h-44 md:w-48 md:h-60 rounded-2xl overflow-hidden border-2 border-white shadow-xl bg-black mx-auto md:mx-0 max-w-sm">
+        <video
+          ref={videoRef}
+          id="camera-preview-video"
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover"
+        />
+        <button
+          onClick={onClose}
+          className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center text-xs hover:bg-black/80 transition-colors backdrop-blur-sm"
+        >
+          ✕
+        </button>
+        <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium backdrop-blur-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          Live
+        </div>
+        <div className="absolute bottom-0 inset-x-0 h-8 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
       </div>
     </div>
   );
